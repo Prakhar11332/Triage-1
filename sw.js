@@ -1,116 +1,110 @@
 /**
- * TriageAI – Custom Service Worker
- *
- * Strategy:
- *  - App Shell (HTML, JS, CSS, fonts): Cache-First
- *  - API / AI inference requests:      Network-First with cache fallback
- *
- * NOTE: vite-plugin-pwa (workbox) will INJECT its own precache manifest
- * into this file at build time via `injectManifest` mode, or generate
- * its own sw using `generateSW` (default). The vite.config.js uses
- * `generateSW` so Workbox manages precaching automatically.
- *
- * This file is kept here as a reference / override point. If you want
- * vite-plugin-pwa to USE this file directly, switch to `injectManifest`
- * strategy in vite.config.js and add the `self.__WB_MANIFEST` injection
- * point below.
+ * Copyright 2018 Google Inc. All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
-const CACHE_NAME = 'triageai-shell-v1'
+// If the loader is already loaded, just stop.
+if (!self.define) {
+  let registry = {};
 
-// App shell files to cache on install
-const APP_SHELL = [
-  '/',
-  '/index.html',
-]
+  // Used for `eval` and `importScripts` where we can't get script URL by other means.
+  // In both cases, it's safe to use a global var because those functions are synchronous.
+  let nextDefineUri;
 
-// ─── Install ────────────────────────────────────────────────────────────────
-self.addEventListener('install', (event) => {
-  console.log('[SW] Installing TriageAI service worker…')
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Pre-caching app shell')
-      return cache.addAll(APP_SHELL)
-    })
-  )
-  self.skipWaiting()
-})
+  const singleRequire = (uri, parentUri) => {
+    uri = new URL(uri + ".js", parentUri).href;
+    return registry[uri] || (
+      
+        new Promise(resolve => {
+          if ("document" in self) {
+            const script = document.createElement("script");
+            script.src = uri;
+            script.onload = resolve;
+            document.head.appendChild(script);
+          } else {
+            nextDefineUri = uri;
+            importScripts(uri);
+            resolve();
+          }
+        })
+      
+      .then(() => {
+        let promise = registry[uri];
+        if (!promise) {
+          throw new Error(`Module ${uri} didn’t register its module`);
+        }
+        return promise;
+      })
+    );
+  };
 
-// ─── Activate ───────────────────────────────────────────────────────────────
-self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating…')
-  event.waitUntil(
-    caches.keys().then((cacheNames) =>
-      Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => {
-            console.log('[SW] Deleting old cache:', name)
-            return caches.delete(name)
-          })
-      )
-    )
-  )
-  self.clients.claim()
-})
-
-// ─── Fetch ───────────────────────────────────────────────────────────────────
-self.addEventListener('fetch', (event) => {
-  const { request } = event
-  const url = new URL(request.url)
-
-  // Only handle same-origin GET requests
-  if (request.method !== 'GET' || url.origin !== self.location.origin) return
-
-  // Network-first for API calls (e.g. /api/*)
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirst(request))
-    return
-  }
-
-  // Cache-first for everything else (app shell, assets)
-  event.respondWith(cacheFirst(request))
-})
-
-// ─── Strategies ──────────────────────────────────────────────────────────────
-
-async function cacheFirst(request) {
-  const cached = await caches.match(request)
-  if (cached) return cached
-  try {
-    const response = await fetch(request)
-    if (response.ok) {
-      const cache = await caches.open(CACHE_NAME)
-      cache.put(request, response.clone())
+  self.define = (depsNames, factory) => {
+    const uri = nextDefineUri || ("document" in self ? document.currentScript.src : "") || location.href;
+    if (registry[uri]) {
+      // Module is already loading or loaded.
+      return;
     }
-    return response
-  } catch {
-    // Return offline fallback for navigation requests
-    if (request.mode === 'navigate') {
-      const fallback = await caches.match('/')
-      if (fallback) return fallback
-    }
-    return new Response('Offline – content unavailable', {
-      status: 503,
-      headers: { 'Content-Type': 'text/plain' },
-    })
-  }
+    let exports = {};
+    const require = depUri => singleRequire(depUri, uri);
+    const specialDeps = {
+      module: { uri },
+      exports,
+      require
+    };
+    registry[uri] = Promise.all(depsNames.map(
+      depName => specialDeps[depName] || require(depName)
+    )).then(deps => {
+      factory(...deps);
+      return exports;
+    });
+  };
 }
+define(['./workbox-ca84f546'], (function (workbox) { 'use strict';
 
-async function networkFirst(request) {
-  try {
-    const response = await fetch(request)
-    if (response.ok) {
-      const cache = await caches.open(CACHE_NAME)
-      cache.put(request, response.clone())
-    }
-    return response
-  } catch {
-    const cached = await caches.match(request)
-    if (cached) return cached
-    return new Response(JSON.stringify({ error: 'offline' }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-}
+  self.skipWaiting();
+  workbox.clientsClaim();
+
+  /**
+   * The precacheAndRoute() method efficiently caches and responds to
+   * requests for URLs in the manifest.
+   * See https://goo.gl/S9QRab
+   */
+  workbox.precacheAndRoute([{
+    "url": "registerSW.js",
+    "revision": "3ca0b8505b4bec776b69afdba2768812"
+  }, {
+    "url": "index.html",
+    "revision": "0.pttloitf72c"
+  }], {});
+  workbox.cleanupOutdatedCaches();
+  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
+    allowlist: [/^\/$/]
+  }));
+  workbox.registerRoute(/^https:\/\/fonts\.googleapis\.com\/.*/i, new workbox.CacheFirst({
+    "cacheName": "google-fonts-cache",
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 10,
+      maxAgeSeconds: 31536000
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
+  workbox.registerRoute(/^https:\/\/fonts\.gstatic\.com\/.*/i, new workbox.CacheFirst({
+    "cacheName": "gstatic-fonts-cache",
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 10,
+      maxAgeSeconds: 31536000
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
+
+}));
